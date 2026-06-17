@@ -1,0 +1,49 @@
+# ============================================================
+# CLEANUP WORKFLOW
+# Runs daily and closes any issues with no label
+# These are stale issues that were never approved or rejected
+#
+# GITEA MIGRATION:
+# - Replace ubuntu-latest with self-hosted runner name
+# - Replace api.github.com with gitea.company.internal/api/v1
+# - Replace cbcbmbtTest with Gitea org name
+# ============================================================
+
+name: Cleanup Unlabelled Issues
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # runs every day at 9am
+  workflow_dispatch:       # can also be triggered manually
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Find and close issues with no label ───────────────
+      - name: Close unlabelled issues
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          # Get all open issues with no label
+          ISSUES=$(curl -s \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/cbcbmbtTest/ops/issues?state=open&labels=&per_page=100")
+
+          # Loop through and close ones with no labels
+          echo $ISSUES | jq -c '.[]' | while read issue; do
+            LABEL_COUNT=$(echo $issue | jq '.labels | length')
+            ISSUE_NUMBER=$(echo $issue | jq -r '.number')
+            ISSUE_TITLE=$(echo $issue | jq -r '.title')
+
+            if [ "$LABEL_COUNT" = "0" ]; then
+              echo "Closing unlabelled issue #$ISSUE_NUMBER: $ISSUE_TITLE"
+              curl -X PATCH \
+                -H "Authorization: token $TOKEN" \
+                -H "Accept: application/vnd.github.v3+json" \
+                https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE_NUMBER \
+                -d '{"state":"closed","state_reason":"not_planned"}'
+            fi
+          done
