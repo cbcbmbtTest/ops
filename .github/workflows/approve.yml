@@ -1,150 +1,69 @@
 # ============================================================
-# CENTRAL DEPLOY WORKFLOW
-# Handles build and registration for all app types
+# APPROVAL WORKFLOW
+# Watches for "Approved" label on issues in ops repo
+# When label added → triggers deploy for that app
+# Closes issue after successful deployment
 #
 # GITEA MIGRATION:
-# - Replace all 'cbcbmbtTest' with your Gitea org name
-# - Replace github.com with gitea.company.internal
-# - Replace actions/checkout@v4 with Gitea equivalent
-# - Runner: change 'ubuntu-latest' to your self-hosted runner
+# - Replace ubuntu-latest with self-hosted runner name
+# - Replace api.github.com with gitea.company.internal/api/v1
+# - Replace cbcbmbtTest with Gitea org name
 # ============================================================
 
-name: Central Deploy
+name: Approve Deployment
 
 on:
-  workflow_dispatch:
-    inputs:
-      repo:
-        description: 'App repo name to deploy'
-        required: true
+  # Triggers when any label is added to an issue
+  issues:
+    types: [labeled]
 
 jobs:
-  deploy:
+  approve:
+    # Only runs when label is exactly "Approved"
+    if: github.event.label.name == 'Approved'
+
     # GITEA: replace with self-hosted runner name
     runs-on: ubuntu-latest
 
     steps:
-      # ── STEP 1: Get app code ──────────────────────────────
-      # Checks out the app repo that triggered this workflow
-      # GITEA: replace github.com with gitea.company.internal
-      - name: Checkout app repo
-        uses: actions/checkout@v4
-        with:
-          repository: cbcbmbtTest/${{ inputs.repo }}
-          token: ${{ secrets.REGISTRY_TOKEN }}
-          ref: main
-
-      # ── STEP 2: Read plugin.json ──────────────────────────
-      # Reads the description field from plugin.json
-      # plugin.json only needs one field: description
-      - name: Read plugin.json
-        id: plugin
+      # ── Extract app name from issue title ─────────────────
+      # Issue title format: "Deploy FacadeConfigurator v1.0.4"
+      # Extracts repo name from title
+      # No changes needed for Gitea
+      - name: Extract repo name
+        id: extract
         run: |
-          DESC=$(jq -r '.description' plugin.json)
-          echo "description=$DESC" >> $GITHUB_OUTPUT
+          TITLE="${{ github.event.issue.title }}"
+          REPO=$(echo "$TITLE" | sed 's/Deploy //' | awk '{print $1}')
+          echo "repo=$REPO" >> $GITHUB_OUTPUT
+          echo "Deploying: $REPO"
 
-      # ── STEP 3: Detect tech ───────────────────────────────
-      # Calls GitHub API to detect dominant language
+      # ── Trigger central deploy workflow ───────────────────
+      # Calls deploy.yml with extracted repo name
       # GITEA: replace api.github.com with gitea.company.internal/api/v1
-      - name: Detect tech
-        id: tech
+      # GITEA: replace cbcbmbtTest with Gitea org name
+      - name: Trigger deploy
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          REPO: ${{ inputs.repo }}
+          REPO: ${{ steps.extract.outputs.repo }}
         run: |
-          LANGS=$(curl -s \
+          curl -X POST \
             -H "Authorization: token $TOKEN" \
-            https://api.github.com/repos/cbcbmbtTest/$REPO/languages)
-          if echo $LANGS | grep -q "Python"; then
-            echo "tech=python" >> $GITHUB_OUTPUT
-          elif echo $LANGS | grep -q "C#"; then
-            echo "tech=dotnet" >> $GITHUB_OUTPUT
-          elif echo $LANGS | grep -q "JavaScript"; then
-            echo "tech=react" >> $GITHUB_OUTPUT
-          elif echo $LANGS | grep -q "TypeScript"; then
-            echo "tech=node" >> $GITHUB_OUTPUT
-          else
-            echo "tech=html" >> $GITHUB_OUTPUT
-          fi
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/cbcbmbtTest/ops/actions/workflows/deploy.yml/dispatches \
+            -d "{\"ref\":\"main\",\"inputs\":{\"repo\":\"$REPO\"}}"
 
-      # ── STEP 4: Generate slug ─────────────────────────────
-      # Converts repo name to URL-safe slug
-      # FacadeConfigurator → facade-configurator
-      - name: Generate slug
-        id: slug
-        run: |
-          SLUG=$(echo "${{ inputs.repo }}" \
-            | tr '[:upper:]' '[:lower:]' \
-            | sed 's/[^a-z0-9]/-/g')
-          echo "slug=$SLUG" >> $GITHUB_OUTPUT
-
-      # ── STEP 5: Build ─────────────────────────────────────
-      # Only runs the build step matching detected tech
-      # Add new tech types here as needed
-
-      - name: Build React
-        if: steps.tech.outputs.tech == 'react'
-        run: npm install && npm run build
-
-      - name: Build dotnet
-        if: steps.tech.outputs.tech == 'dotnet'
-        run: dotnet publish -c Release -o ./publish
-
-      - name: Build HTML
-        if: steps.tech.outputs.tech == 'html'
-        run: echo "Static HTML - no build needed"
-
-      # ── STEP 6: Deploy to server ──────────────────────────
-      # NOT YET IMPLEMENTED - no server available
-      # When server is ready uncomment and configure:
-      #
-      # - name: Copy files to server
-      #   run: |
-      #     scp -r ./dist/* deploy@${{ secrets.SERVER_HOST }}:C:/inetpub/apps/${{ steps.slug.outputs.slug }}/
-      #
-      # - name: Configure IIS
-      #   run: |
-      #     ssh deploy@${{ secrets.SERVER_HOST }} "powershell \
-      #       New-WebApplication \
-      #       -Name '${{ steps.slug.outputs.slug }}' \
-      #       -Site 'Default Web Site' \
-      #       -PhysicalPath 'C:\inetpub\apps\${{ steps.slug.outputs.slug }}'"
-      #
-      # SERVER SECRETS TO ADD WHEN READY:
-      # SERVER_HOST    = server IP address
-      # SERVER_SSH_KEY = SSH private key
-
-      # ── STEP 7: Register in plugins repo ──────────────────
-      # Creates {slug}.json and pushes to plugins repo
-      # plugins repo then auto-generates index.json
-      # GITEA: replace github.com with gitea.company.internal
-      - name: Register in plugins repo
+      # ── Close issue after deployment triggered ────────────
+      # Marks issue as completed
+      # GITEA: replace api.github.com with gitea.company.internal/api/v1
+      # GITEA: replace cbcbmbtTest with Gitea org name
+      - name: Close issue
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
         run: |
-          SLUG="${{ steps.slug.outputs.slug }}"
-          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
-
-          cat > $SLUG.json << EOF
-          {
-            "name": "${{ inputs.repo }}",
-            "slug": "$SLUG",
-            "description": "${{ steps.plugin.outputs.description }}",
-            "path": "/$SLUG/",
-            "url": "",
-            "tech": "${{ steps.tech.outputs.tech }}",
-            "version": "$VERSION",
-            "port": null
-          }
-          EOF
-
-          # GITEA: replace github.com with gitea.company.internal
-          # GITEA: replace cbcbmbtTest with Gitea org name
-          git clone https://x-token:$TOKEN@github.com/cbcbmbtTest/plugins
-          cp $SLUG.json plugins/$SLUG.json
-          cd plugins
-          git config user.email "ci@company.de"
-          git config user.name "CI/CD Bot"
-          git add .
-          git commit -m "chore: register $SLUG v$VERSION"
-          git push
+          curl -X PATCH \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE \
+            -d '{"state":"closed","state_reason":"completed"}'
