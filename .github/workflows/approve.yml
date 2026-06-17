@@ -1,6 +1,6 @@
 # ============================================================
 # APPROVAL WORKFLOW
-# Watches for "approved" label on issues in ops repo
+# Watches for "Approved" label on issues in ops repo
 # When label added → triggers deploy for that app
 # Closes issue after successful deployment
 #
@@ -18,44 +18,46 @@ on:
 
 jobs:
   approve:
-    # Only runs when label is "approved"
-    if: github.event.label.name == 'approved'
-    
-    # GITEA: replace with self-hosted runner name
+    # Only runs when label is "Approved"
+    if: github.event.label.name == 'Approved'
+
     runs-on: ubuntu-latest
 
     steps:
       # ── Extract app name from issue title ─────────────────
-      # Issue title format: "Deploy FacadeConfigurator v1.0.0"
+      # Issue title format: "Deploy FacadeConfigurator v1.0.4"
       # Extracts repo name from title
       - name: Extract repo name
         id: extract
         run: |
           TITLE="${{ github.event.issue.title }}"
-          # Extract repo name (word after "Deploy ")
           REPO=$(echo "$TITLE" | sed 's/Deploy //' | awk '{print $1}')
           echo "repo=$REPO" >> $GITHUB_OUTPUT
           echo "Deploying: $REPO"
 
       # ── Trigger central deploy workflow ───────────────────
-      # Calls deploy.yml with extracted repo name
       # GITEA: replace api.github.com with gitea.company.internal/api/v1
       # GITEA: replace cbcbmbtTest with Gitea org name
       - name: Trigger deploy
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          REPO: ${{ steps.extract.outputs.repo }}
         run: |
           curl -X POST \
-            -H "Authorization: token ${{ secrets.REGISTRY_TOKEN }}" \
+            -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/cbcbmbtTest/ops/actions/workflows/deploy.yml/dispatches \
-            -d '{"ref":"main","inputs":{"repo":"${{ steps.extract.outputs.repo }}"}}'
+            -d "{\"ref\":\"main\",\"inputs\":{\"repo\":\"$REPO\"}}"
 
       # ── Close issue after deployment triggered ────────────
-      # Marks issue as completed
       # GITEA: replace api.github.com with gitea.company.internal/api/v1
       - name: Close issue
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
         run: |
           curl -X PATCH \
-            -H "Authorization: token ${{ secrets.REGISTRY_TOKEN }}" \
+            -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/cbcbmbtTest/ops/issues/${{ github.event.issue.number }} \
+            https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE \
             -d '{"state":"closed","state_reason":"completed"}'
