@@ -3,6 +3,11 @@
 # Handles Node.js app deployment via Docker
 # Called by deploy.yml when tech = node
 #
+# WHEN SERVER READY - uncomment server deployment steps
+# and add secrets:
+# SERVER_HOST    = server IP or hostname
+# SERVER_SSH_KEY = SSH private key
+#
 # GITEA MIGRATION:
 # - Replace ubuntu-latest with self-hosted runner name
 # - Replace cbcbmbtTest with Gitea org name
@@ -38,30 +43,30 @@ jobs:
           ref: ${{ inputs.version }}
 
       # ── Build Docker image ────────────────────────────────
-      - name: Build Docker image
-        run: |
-          docker build -t ${{ inputs.slug }} .
-
-      # ── Deploy to server ──────────────────────────────────
       # NOT YET IMPLEMENTED - no server available
-      # When server is ready uncomment:
+      # When server ready uncomment:
       #
-      # - name: Push to Gitea Docker registry
-      #   run: |
-      #     docker tag ${{ inputs.slug }} gitea.company.internal/${{ inputs.slug }}
-      #     docker push gitea.company.internal/${{ inputs.slug }}
+      # - name: Build Docker image
+      #   run: docker build -t ${{ inputs.slug }}:${{ inputs.version }} .
       #
-      # - name: Pull and run on server
+      # - name: Push to Gitea registry
       #   run: |
-      #     ssh deploy@${{ secrets.SERVER_HOST }} \
-      #     "docker pull gitea.company.internal/${{ inputs.slug }} && \
-      #      docker stop ${{ inputs.slug }} || true && \
-      #      docker rm ${{ inputs.slug }} || true && \
-      #      docker run -d \
-      #        --name ${{ inputs.slug }} \
-      #        --restart always \
-      #        -p 3000:3000 \
-      #        gitea.company.internal/${{ inputs.slug }}"
+      #     docker tag ${{ inputs.slug }}:${{ inputs.version }} \
+      #       gitea.company.internal/cbcbmbtTest/${{ inputs.slug }}:${{ inputs.version }}
+      #     docker push gitea.company.internal/cbcbmbtTest/${{ inputs.slug }}:${{ inputs.version }}
+      #
+      # - name: Deploy to server
+      #   run: |
+      #     ssh deploy@${{ secrets.SERVER_HOST }} "
+      #       docker pull gitea.company.internal/cbcbmbtTest/${{ inputs.slug }}:${{ inputs.version }} &&
+      #       docker stop ${{ inputs.slug }} || true &&
+      #       docker rm ${{ inputs.slug }} || true &&
+      #       docker run -d \
+      #         --name ${{ inputs.slug }} \
+      #         --restart always \
+      #         -p 3000:3000 \
+      #         gitea.company.internal/cbcbmbtTest/${{ inputs.slug }}:${{ inputs.version }}
+      #     "
       #
       # - name: Configure IIS reverse proxy
       #   run: |
@@ -70,10 +75,9 @@ jobs:
       #       -Name '${{ inputs.slug }}' \
       #       -Site 'Default Web Site' \
       #       -PhysicalPath 'C:\inetpub\apps\${{ inputs.slug }}'"
-      #
-      # SERVER SECRETS TO ADD WHEN READY:
-      # SERVER_HOST    = server IP address
-      # SERVER_SSH_KEY = SSH private key
+
+      - name: No deployment yet
+        run: echo "Node.js deployment - server not yet available"
 
       # ── Register in plugins repo ──────────────────────────
       - name: Register in plugins repo
@@ -82,7 +86,7 @@ jobs:
         run: |
           SLUG="${{ inputs.slug }}"
           DESC=$(jq -r '.description' plugin.json)
-          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+          VERSION="${{ inputs.version }}"
 
           cat > $SLUG.json << EOF
           {
@@ -103,5 +107,5 @@ jobs:
           git config user.email "ci@company.de"
           git config user.name "CI/CD Bot"
           git add .
-          git commit -m "chore: register $SLUG v$VERSION"
+          git commit -m "chore: register $SLUG $VERSION"
           git push https://x-token:$TOKEN@github.com/cbcbmbtTest/plugins main
