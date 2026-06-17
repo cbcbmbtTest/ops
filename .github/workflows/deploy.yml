@@ -1,16 +1,13 @@
 # ============================================================
 # CENTRAL DEPLOY WORKFLOW
+# Triggers when a deployment PR is merged to main
+# Reads deployment manifest from deployments/ folder
 # Detects tech and calls correct sub-workflow
-# Posts tech comment on issue after deployment
 #
-# SUB-WORKFLOWS (must exist as .yml files):
+# SUB-WORKFLOWS:
 # - deploy-html.yml   ✅
 # - deploy-node.yml   ✅
 # - deploy-python.yml ✅
-#
-# ADD LATER when files are created:
-# - deploy-react.yml
-# - deploy-dotnet.yml
 #
 # GITEA MIGRATION:
 # - Replace ubuntu-latest with self-hosted runner name
@@ -21,49 +18,63 @@
 name: Central Deploy
 
 on:
-  workflow_dispatch:
-    inputs:
-      repo:
-        description: 'App repo name to deploy'
-        required: true
-      version:
-        description: 'Version tag (leave empty for latest)'
-        required: false
-        default: 'main'
-      issue_number:
-        description: 'Ops issue number'
-        required: false
-        default: ''
+  push:
+    branches: [main]
+    paths:
+      - 'deployments/*.yml'
 
 jobs:
-  # ── Detect tech ─────────────────────────────────────────
+  # ── Read deployment manifest ─────────────────────────────
   detect:
     runs-on: ubuntu-latest
     outputs:
+      repo: ${{ steps.manifest.outputs.repo }}
+      slug: ${{ steps.manifest.outputs.slug }}
+      version: ${{ steps.manifest.outputs.version }}
       tech: ${{ steps.tech.outputs.tech }}
-      slug: ${{ steps.slug.outputs.slug }}
 
     steps:
+      - name: Checkout ops repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # ── Find changed deployment manifest ─────────────────
+      - name: Get changed manifest
+        id: manifest
+        run: |
+          FILE=$(git diff --name-only HEAD~1 HEAD -- 'deployments/*.yml' | head -1)
+          echo "Reading manifest: $FILE"
+          REPO=$(yq '.app' $FILE)
+          SLUG=$(yq '.slug' $FILE)
+          VERSION=$(yq '.version' $FILE)
+          echo "repo=$REPO" >> $GITHUB_OUTPUT
+          echo "slug=$SLUG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # ── Checkout app repo ─────────────────────────────────
       - name: Checkout app repo
         uses: actions/checkout@v4
         with:
-          repository: cbcbmbtTest/${{ inputs.repo }}
+          repository: cbcbmbtTest/${{ steps.manifest.outputs.repo }}
           token: ${{ secrets.REGISTRY_TOKEN }}
-          ref: ${{ inputs.version }}
+          ref: ${{ steps.manifest.outputs.version }}
+          path: app
 
-      # Check plugin.json for manual tech override first
+      # ── Detect tech ───────────────────────────────────────
+      # Check plugin.json for override first
       # If not set → auto-detect from GitHub languages API
       # GITEA: replace api.github.com with gitea.company.internal/api/v1
       - name: Detect tech
         id: tech
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          REPO: ${{ inputs.repo }}
+          REPO: ${{ steps.manifest.outputs.repo }}
         run: |
-          OVERRIDE=$(jq -r '.tech // empty' plugin.json 2>/dev/null)
+          OVERRIDE=$(jq -r '.tech // empty' app/plugin.json 2>/dev/null)
           if [ -n "$OVERRIDE" ]; then
             echo "tech=$OVERRIDE" >> $GITHUB_OUTPUT
-            echo "Tech override from plugin.json: $OVERRIDE"
+            echo "Tech override: $OVERRIDE"
           else
             LANGS=$(curl -s \
               -H "Authorization: token $TOKEN" \
@@ -82,14 +93,6 @@ jobs:
             echo "Tech auto-detected"
           fi
 
-      - name: Generate slug
-        id: slug
-        run: |
-          SLUG=$(echo "${{ inputs.repo }}" \
-            | tr '[:upper:]' '[:lower:]' \
-            | sed 's/[^a-z0-9]/-/g')
-          echo "slug=$SLUG" >> $GITHUB_OUTPUT
-
   # ── Call correct sub-workflow ────────────────────────────
 
   deploy-html:
@@ -97,9 +100,9 @@ jobs:
     if: needs.detect.outputs.tech == 'html'
     uses: cbcbmbtTest/ops/.github/workflows/deploy-html.yml@main
     with:
-      repo: ${{ inputs.repo }}
+      repo: ${{ needs.detect.outputs.repo }}
       slug: ${{ needs.detect.outputs.slug }}
-      version: ${{ inputs.version }}
+      version: ${{ needs.detect.outputs.version }}
     secrets: inherit
 
   deploy-node:
@@ -107,9 +110,9 @@ jobs:
     if: needs.detect.outputs.tech == 'node'
     uses: cbcbmbtTest/ops/.github/workflows/deploy-node.yml@main
     with:
-      repo: ${{ inputs.repo }}
+      repo: ${{ needs.detect.outputs.repo }}
       slug: ${{ needs.detect.outputs.slug }}
-      version: ${{ inputs.version }}
+      version: ${{ needs.detect.outputs.version }}
     secrets: inherit
 
   deploy-python:
@@ -117,38 +120,7 @@ jobs:
     if: needs.detect.outputs.tech == 'python'
     uses: cbcbmbtTest/ops/.github/workflows/deploy-python.yml@main
     with:
-      repo: ${{ inputs.repo }}
+      repo: ${{ needs.detect.outputs.repo }}
       slug: ${{ needs.detect.outputs.slug }}
-      version: ${{ inputs.version }}
+      version: ${{ needs.detect.outputs.version }}
     secrets: inherit
-
-  # ── Notify ───────────────────────────────────────────────
-  # Runs after all deploy jobs complete
-  # Only comments tech on issue — labels handled by UploadToServer.yml
-  # GITEA: replace api.github.com with gitea.company.internal/api/v1
-  # GITEA: replace cbcbmbtTest with Gitea org name
-  notify:
-    needs: [detect, deploy-html, deploy-node, deploy-python]
-    if: |
-      always() &&
-      inputs.issue_number != '' &&
-      (
-        needs.deploy-html.result == 'success' ||
-        needs.deploy-node.result == 'success' ||
-        needs.deploy-python.result == 'success'
-      )
-    runs-on: ubuntu-latest
-
-    steps:
-      # ── Comment tech on issue ─────────────────────────────
-      - name: Comment tech on issue
-        env:
-          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          ISSUE: ${{ inputs.issue_number }}
-          TECH: ${{ needs.detect.outputs.tech }}
-        run: |
-          curl -X POST \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE/comments \
-            -d "{\"body\":\"Tech: $TECH\"}"
