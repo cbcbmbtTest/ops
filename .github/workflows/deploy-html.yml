@@ -23,6 +23,10 @@ on:
       version:
         required: true
         type: string
+      issue_number:
+        required: false
+        type: string
+        default: ''
 
 jobs:
   deploy:
@@ -61,10 +65,6 @@ jobs:
       # SERVER_SSH_KEY = SSH private key
 
       # ── Register in plugins repo ──────────────────────────
-      # Pushes descriptor to plugins repo
-      # generate.yml triggers → updates index.json
-      # Toolbox reads index.json → shows tile
-      # GITEA: replace github.com with gitea.company.internal
       - name: Register in plugins repo
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
@@ -94,3 +94,19 @@ jobs:
           git add .
           git commit -m "chore: register $SLUG v$VERSION"
           git push https://x-token:$TOKEN@github.com/cbcbmbtTest/plugins main
+
+      # ── Add tech comment to issue ─────────────────────────
+      # Posts tech type as comment on the ops issue
+      # GITEA: replace api.github.com with gitea.company.internal/api/v1
+      # GITEA: replace cbcbmbtTest with Gitea org name
+      - name: Comment tech on issue
+        if: inputs.issue_number != ''
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          ISSUE: ${{ inputs.issue_number }}
+        run: |
+          curl -X POST \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE/comments \
+            -d '{"body":"⚙️ Tech: html"}'
