@@ -1,7 +1,7 @@
 # ============================================================
 # CENTRAL DEPLOY WORKFLOW
 # Detects tech and calls correct sub-workflow
-# Handles issue comments and labels centrally
+# Posts tech comment on issue after deployment
 #
 # SUB-WORKFLOWS (must exist as .yml files):
 # - deploy-html.yml   ✅
@@ -124,21 +124,24 @@ jobs:
 
   # ── Notify ───────────────────────────────────────────────
   # Runs after all deploy jobs complete
-  # Comments tech on issue and handles failure label
+  # Only comments tech on issue — labels handled by UploadToServer.yml
   # GITEA: replace api.github.com with gitea.company.internal/api/v1
   # GITEA: replace cbcbmbtTest with Gitea org name
   notify:
     needs: [detect, deploy-html, deploy-node, deploy-python]
-    if: always() && inputs.issue_number != ''
+    if: |
+      always() &&
+      inputs.issue_number != '' &&
+      (
+        needs.deploy-html.result == 'success' ||
+        needs.deploy-node.result == 'success' ||
+        needs.deploy-python.result == 'success'
+      )
     runs-on: ubuntu-latest
 
     steps:
       # ── Comment tech on issue ─────────────────────────────
       - name: Comment tech on issue
-        if: |
-          needs.deploy-html.result == 'success' ||
-          needs.deploy-node.result == 'success' ||
-          needs.deploy-python.result == 'success'
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
           ISSUE: ${{ inputs.issue_number }}
@@ -149,19 +152,3 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE/comments \
             -d "{\"body\":\"Tech: $TECH\"}"
-
-      # ── Add deployment failed label ───────────────────────
-      - name: Add deployment failed label
-        if: |
-          needs.deploy-html.result == 'failure' ||
-          needs.deploy-node.result == 'failure' ||
-          needs.deploy-python.result == 'failure'
-        env:
-          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-          ISSUE: ${{ inputs.issue_number }}
-        run: |
-          curl -X POST \
-            -H "Authorization: token $TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE/labels \
-            -d '{"labels":["Deployment failed"]}'
