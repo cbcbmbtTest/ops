@@ -1,0 +1,107 @@
+# ============================================================
+# DEPLOY PYTHON
+# Handles Python app deployment via Docker
+# Called by deploy.yml when tech = python
+#
+# GITEA MIGRATION:
+# - Replace ubuntu-latest with self-hosted runner name
+# - Replace cbcbmbtTest with Gitea org name
+# - Replace github.com with gitea.company.internal
+# - Replace Docker Hub with Gitea Docker registry
+# ============================================================
+
+name: Deploy Python
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        required: true
+        type: string
+      slug:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout app repo
+        uses: actions/checkout@v4
+        with:
+          repository: cbcbmbtTest/${{ inputs.repo }}
+          token: ${{ secrets.REGISTRY_TOKEN }}
+          ref: ${{ inputs.version }}
+
+      # ── Build Docker image ────────────────────────────────
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ inputs.slug }} .
+
+      # ── Deploy to server ──────────────────────────────────
+      # NOT YET IMPLEMENTED - no server available
+      # When server is ready uncomment:
+      #
+      # - name: Push to Gitea Docker registry
+      #   run: |
+      #     docker tag ${{ inputs.slug }} gitea.company.internal/${{ inputs.slug }}
+      #     docker push gitea.company.internal/${{ inputs.slug }}
+      #
+      # - name: Pull and run on server
+      #   run: |
+      #     ssh deploy@${{ secrets.SERVER_HOST }} \
+      #     "docker pull gitea.company.internal/${{ inputs.slug }} && \
+      #      docker stop ${{ inputs.slug }} || true && \
+      #      docker rm ${{ inputs.slug }} || true && \
+      #      docker run -d \
+      #        --name ${{ inputs.slug }} \
+      #        --restart always \
+      #        -p 8000:8000 \
+      #        gitea.company.internal/${{ inputs.slug }}"
+      #
+      # - name: Configure IIS reverse proxy
+      #   run: |
+      #     ssh deploy@${{ secrets.SERVER_HOST }} \
+      #     "powershell New-WebApplication \
+      #       -Name '${{ inputs.slug }}' \
+      #       -Site 'Default Web Site' \
+      #       -PhysicalPath 'C:\inetpub\apps\${{ inputs.slug }}'"
+      #
+      # SERVER SECRETS TO ADD WHEN READY:
+      # SERVER_HOST    = server IP address
+      # SERVER_SSH_KEY = SSH private key
+
+      # ── Register in plugins repo ──────────────────────────
+      - name: Register in plugins repo
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          SLUG="${{ inputs.slug }}"
+          DESC=$(jq -r '.description' plugin.json)
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+
+          cat > $SLUG.json << EOF
+          {
+            "name": "${{ inputs.repo }}",
+            "slug": "$SLUG",
+            "description": "$DESC",
+            "path": "/$SLUG/",
+            "url": "",
+            "tech": "python",
+            "version": "$VERSION",
+            "port": 8000
+          }
+          EOF
+
+          git clone https://x-token:$TOKEN@github.com/cbcbmbtTest/plugins
+          cp $SLUG.json plugins/$SLUG.json
+          cd plugins
+          git config user.email "ci@company.de"
+          git config user.name "CI/CD Bot"
+          git add .
+          git commit -m "chore: register $SLUG v$VERSION"
+          git push https://x-token:$TOKEN@github.com/cbcbmbtTest/plugins main
