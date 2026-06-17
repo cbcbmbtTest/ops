@@ -2,7 +2,7 @@
 # APPROVAL WORKFLOW
 # Watches for "Approved" label on issues in ops repo
 # When label added → triggers deploy for that app
-# Changes label to "deployed to toolbox" after deployment
+# Changes label to "Deployed to toolbox" after deployment
 #
 # GITEA MIGRATION:
 # - Replace ubuntu-latest with self-hosted runner name
@@ -23,8 +23,6 @@ jobs:
 
     steps:
       # ── Extract app name from issue title ─────────────────
-      # Issue title format: "Deploy FacadeConfigurator v1.0.4"
-      # Extracts repo name from title
       - name: Extract repo name
         id: extract
         run: |
@@ -34,9 +32,6 @@ jobs:
           echo "Deploying: $REPO"
 
       # ── Trigger central deploy workflow ───────────────────
-      # Calls deploy.yml with extracted repo name
-      # GITEA: replace api.github.com with gitea.company.internal/api/v1
-      # GITEA: replace cbcbmbtTest with Gitea org name
       - name: Trigger deploy
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
@@ -49,8 +44,6 @@ jobs:
             -d "{\"ref\":\"main\",\"inputs\":{\"repo\":\"$REPO\"}}"
 
       # ── Remove "Approved" label ───────────────────────────
-      # Cleans up after approval
-      # GITEA: replace api.github.com with gitea.company.internal/api/v1
       - name: Remove approved label
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
@@ -61,11 +54,9 @@ jobs:
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE/labels/Approved"
 
-      # ── Add "deployed to toolbox" label ───────────────────
+      # ── Add "Deployed to toolbox" label ───────────────────
       # Issue stays OPEN — shows app is live on server
-      # Admin sees all deployed apps as open issues
-      # To remove app → change label to "remove"
-      # GITEA: replace api.github.com with gitea.company.internal/api/v1
+      # To remove app → change label to "Remove"
       - name: Add deployed to toolbox label
         env:
           TOKEN: ${{ secrets.REGISTRY_TOKEN }}
@@ -75,4 +66,4 @@ jobs:
             -H "Authorization: token $TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/cbcbmbtTest/ops/issues/$ISSUE/labels \
-            -d '{"labels":["deployed to toolbox"]}'
+            -d '{"labels":["Deployed to toolbox"]}'
