@@ -1,0 +1,96 @@
+# ============================================================
+# DEPLOY HTML
+# Handles static HTML app deployment
+# Called by deploy.yml when tech = html
+#
+# GITEA MIGRATION:
+# - Replace ubuntu-latest with self-hosted runner name
+# - Replace cbcbmbtTest with Gitea org name
+# - Replace github.com with gitea.company.internal
+# ============================================================
+
+name: Deploy HTML
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        required: true
+        type: string
+      slug:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout app repo
+        uses: actions/checkout@v4
+        with:
+          repository: cbcbmbtTest/${{ inputs.repo }}
+          token: ${{ secrets.REGISTRY_TOKEN }}
+          ref: ${{ inputs.version }}
+
+      # ── No build needed ───────────────────────────────────
+      - name: No build needed
+        run: echo "Static HTML - no build step needed"
+
+      # ── Deploy to server ──────────────────────────────────
+      # NOT YET IMPLEMENTED - no server available
+      # When server is ready uncomment:
+      #
+      # - name: Copy files to server
+      #   run: |
+      #     scp -r ./* deploy@${{ secrets.SERVER_HOST }}:C:/inetpub/apps/${{ inputs.slug }}/
+      #
+      # - name: Configure IIS static site
+      #   run: |
+      #     ssh deploy@${{ secrets.SERVER_HOST }} \
+      #     "powershell New-WebApplication \
+      #       -Name '${{ inputs.slug }}' \
+      #       -Site 'Default Web Site' \
+      #       -PhysicalPath 'C:\inetpub\apps\${{ inputs.slug }}'"
+      #
+      # SERVER SECRETS TO ADD WHEN READY:
+      # SERVER_HOST    = server IP address
+      # SERVER_SSH_KEY = SSH private key
+
+      # ── Register in plugins repo ──────────────────────────
+      # Pushes descriptor to plugins repo
+      # generate.yml triggers → updates index.json
+      # Toolbox reads index.json → shows tile
+      # GITEA: replace github.com with gitea.company.internal
+      - name: Register in plugins repo
+        env:
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          SLUG="${{ inputs.slug }}"
+          DESC=$(jq -r '.description' plugin.json)
+          VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+
+          cat > $SLUG.json << EOF
+          {
+            "name": "${{ inputs.repo }}",
+            "slug": "$SLUG",
+            "description": "$DESC",
+            "path": "/$SLUG/",
+            "url": "",
+            "tech": "html",
+            "version": "$VERSION",
+            "port": null
+          }
+          EOF
+
+          git clone https://x-token:$TOKEN@github.com/cbcbmbtTest/plugins
+          cp $SLUG.json plugins/$SLUG.json
+          cd plugins
+          git config user.email "ci@company.de"
+          git config user.name "CI/CD Bot"
+          git add .
+          git commit -m "chore: register $SLUG v$VERSION"
+          git push https://x-token:$TOKEN@github.com/cbcbmbtTest/plugins main
